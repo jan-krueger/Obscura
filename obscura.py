@@ -6,6 +6,9 @@ import yaml
 import time
 import argparse
 import tempfile
+import logging
+import os
+
 
 def printProgressBar(iteration, total, prefix='', suffix='', decimals=1, length=100, fill='█', printEnd="\r"):
     """
@@ -40,7 +43,7 @@ def capture_images(device_id, _checkerboard, delta_frame: float, _criteria, _tem
     current = time.time()
     video_capture = cv2.VideoCapture(device_id)
     if not video_capture.isOpened():
-        print("Failed to open the device.")
+        logging.error("Failed to open the camera.")
         return
     while video_capture.isOpened():
         # Capture frame-by-frame
@@ -49,7 +52,7 @@ def capture_images(device_id, _checkerboard, delta_frame: float, _criteria, _tem
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         ret, corners = cv2.findChessboardCorners(gray, _checkerboard,
-                                 cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_FAST_CHECK + cv2.CALIB_CB_NORMALIZE_IMAGE)
+                                                 cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_FAST_CHECK + cv2.CALIB_CB_NORMALIZE_IMAGE)
 
         if ret is True and time.time() - current >= delta_frame:
             current = time.time()
@@ -106,7 +109,7 @@ def calibrate_camera(images: [], _checkerboard, _square_size, _criteria, width: 
 
             cv2.imshow("cropped", image)
             cv2.waitKey(20)
-        printProgressBar(i+1, len(images))
+        printProgressBar(i + 1, len(images))
 
     if counter == 0:
         return False, "Not a single image contained a chessboard pattern that could be detected.", None
@@ -144,7 +147,39 @@ def calibrate_camera(images: [], _checkerboard, _square_size, _criteria, width: 
     return (data, total_error / len(threedpoints), counter / len(images))
 
 
+def init_logging():
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+
+    sh = logging.StreamHandler()
+    formatter = logging.Formatter("Obscura >> %(message)s")
+    sh.setFormatter(formatter)
+
+    def decorate_emit(fn):
+        def new(*args):
+            levelno = args[0].levelno
+            color = '\x1b[0m'
+            if levelno == logging.ERROR or levelno == logging.CRITICAL:
+                color = '\x1b[31;1m'
+            elif levelno >= logging.WARNING:
+                color = '\x1b[33;1m'
+            elif levelno >= logging.INFO:
+                color = '\x1b[32;1m'
+            elif levelno >= logging.DEBUG:
+                color = '\x1b[35;1m'
+
+            args[0].msg = "{0}{1}\x1b[0m".format(color, args[0].msg)
+            return fn(*args)
+
+        return new
+
+    sh.emit = decorate_emit(sh.emit)
+    logger.addHandler(sh)
+
+
 def main():
+    init_logging()
+
     # Parse arguments
     parser = argparse.ArgumentParser(description='Calibrate a camera using OpenCV.')
     parser.add_argument('--rows', '-r', type=int, required=True, help='Rows on the chessboard')
@@ -154,11 +189,29 @@ def main():
     parser.add_argument('--frameTime', '-ft', type=float, default=1, help='Time between capturing images [s]')
     parser.add_argument("--device", "-d", type=int,
                         help='Selects the id of the device that should be used to capture the images.')
-    parser.add_argument("--images", "-i", type=str, default='.', help='Directory with images.')
+    parser.add_argument("--images", "-i", type=str, help='Directory with images.')
     parser.add_argument('--ext', "-e", type=str, help="File extension of images.")
     parser.add_argument('--output', "-o", type=str, help="Output file name.")
 
     arguments = parser.parse_args()
+
+    if arguments.device is None and arguments.images is None:
+        logging.error('You need to provide either a --device or a directory with --images.')
+        return
+
+    if arguments.device is not None:
+        if os.path.exists('/dev/video%d' % arguments.device) is False:
+            logging.error('No --device with the id /dev/video%d exists.' % arguments.device)
+            return
+
+    if arguments.images is not None:
+        if os.path.exists(arguments.images) is False:
+            logging.error("The provided path for the images directory does not exist: '%s'", arguments.images)
+            return
+        if arguments.device is not None:
+            logging.warning("The 'images' argument was provided but the images will be captured using the camera "
+                            "therefore the argument will be ignored, and the captured frames from the camera will be "
+                            "used for calibration. ")
 
     # Define the dimensions of checkerboard
     checkerboard = (arguments.columns, arguments.rows)
@@ -167,34 +220,31 @@ def main():
                 cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
     deltaFrame = arguments.frameTime  # [s]
 
+    temp_directory = None
     image_dir = arguments.images
     images = []
     if arguments.device is not None:
         temp_directory = tempfile.TemporaryDirectory()
+        image_dir = temp_directory.name
         capture_images(arguments.device, checkerboard, deltaFrame, criteria, temp_directory)
 
-        if image_dir is not None:
-            print("Obscure >> The 'images' argument was provided but the images have been captured using the camera "
-                  "therefore the argument will be ignored, and the captured frames from the camera will be used for"
-                  " calibration. ")
-            images = glob.glob((temp_directory.name + '/') + '*.png')
-            temp_directory.cleanup()
-
-    images = glob.glob('%s*.%s' % (image_dir, arguments.ext or "png"))
+    images = glob.glob('%s/*.%s' % (image_dir, arguments.ext or "png"))
     data, error, used_images = calibrate_camera(images, checkerboard, square_size, criteria,
-                                                width=640, height=480, model=arguments.model)
+                                            width=640, height=480, model=arguments.model)
+
+    if temp_directory is not None:
+        temp_directory.cleanup()
 
     if data is False:
-        print("Calibration Failed!")
-        print("Description: ", error)
+        logging.error("Calibration Failed! - %s", error)
     else:
         filename = "calibration_matrix_" + str(int(round(time.time() * 1000))) + ".yaml"
         if arguments.output is not None:
             filename = arguments.output
 
-        print("Used images: ", used_images * 100, "%")
-        print("Error: ", error)
-        print("Saving calibration data to ", filename)
+        logging.info("Used images: %.2f%%", used_images * 100)
+        logging.info("Error: %.4f", error)
+        logging.info("Saving calibration data to %s", filename)
         # and save it to a file
         with open(filename, "w+") as file:
             yaml.dump(data, file)
