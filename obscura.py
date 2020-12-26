@@ -42,6 +42,8 @@ def capture_images(device_id, _checkerboard, delta_frame: float, _criteria, _tem
     """
     current = time.time()
     video_capture = cv2.VideoCapture(device_id)
+    overlay_image = None
+
     if not video_capture.isOpened():
         logging.error("Failed to open the camera.")
         return
@@ -49,20 +51,22 @@ def capture_images(device_id, _checkerboard, delta_frame: float, _criteria, _tem
         # Capture frame-by-frame
         ret, frame = video_capture.read()
         original_frame = frame.copy()
+
+        if overlay_image is None:
+            overlay_image = np.zeros(frame.shape, frame.dtype)
+            cv2.putText(overlay_image, 'OpenCV', (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0))
+
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         ret, corners = cv2.findChessboardCorners(gray, _checkerboard,
-                                                 cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_FAST_CHECK + cv2.CALIB_CB_NORMALIZE_IMAGE)
-
+                                 cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_FAST_CHECK + cv2.CALIB_CB_NORMALIZE_IMAGE)
         if ret is True and time.time() - current >= delta_frame:
             current = time.time()
-            corners2 = cv2.cornerSubPix(
-                gray, corners, (3, 3), (-1, -1), _criteria)
-            frame = cv2.drawChessboardCorners(frame,
-                                              _checkerboard,
-                                              corners2, ret)
-            cv2.imwrite(_temp_directory.name + '/' + str(int(round(time.time() * 1000))) + '.png', original_frame)
+            corners2 = cv2.cornerSubPix(gray, corners, (3, 3), (-1, -1), _criteria)
+            frame = cv2.drawChessboardCorners(frame, _checkerboard, corners2, ret)
+            cv2.imwrite(_temp_directory.name + '/' + str(int(round(time.time()))) + '.png', original_frame)
 
+        frame = cv2.addWeighted(overlay_image, 0.4, frame, 0.6, 0)
         cv2.imshow('Video', frame)
         key = cv2.waitKey(50)
 
@@ -70,8 +74,7 @@ def capture_images(device_id, _checkerboard, delta_frame: float, _criteria, _tem
             break
 
 
-def calibrate_camera(images: [], _checkerboard, _square_size, _criteria, width: int = 640, height: int = 480,
-                     model: str = 'fisheye') -> object:
+def calibrate_camera(images: [], _checkerboard, _square_size, _criteria, model: str = 'fisheye') -> object:
     """
 
     :rtype: object
@@ -80,11 +83,8 @@ def calibrate_camera(images: [], _checkerboard, _square_size, _criteria, width: 
         return False, "No images were found", None
 
     # 3D points real world coordinates
-    objectp3d = np.zeros((1, _checkerboard[0]
-                          * _checkerboard[1],
-                          3), np.float32)
-    objectp3d[0, :, :2] = np.mgrid[0:_checkerboard[0],
-                          0:_checkerboard[1]].T.reshape(-1, 2)
+    objectp3d = np.zeros((1, _checkerboard[0] * _checkerboard[1], 3), np.float32)
+    objectp3d[0, :, :2] = np.mgrid[0:_checkerboard[0],0:_checkerboard[1]].T.reshape(-1, 2)
     objectp3d *= _square_size
     threedpoints = []
     twodpoints = []
@@ -103,9 +103,7 @@ def calibrate_camera(images: [], _checkerboard, _square_size, _criteria, width: 
 
             corners2 = cv2.cornerSubPix(image_gray, corners, (3, 3), (-1, -1), _criteria)
             twodpoints.append(corners2)
-            image = cv2.drawChessboardCorners(image,
-                                              _checkerboard,
-                                              corners2, ret)
+            image = cv2.drawChessboardCorners(image, _checkerboard, corners2, ret)
 
             cv2.imshow("cropped", image)
             cv2.waitKey(20)
@@ -115,26 +113,21 @@ def calibrate_camera(images: [], _checkerboard, _square_size, _criteria, width: 
         return False, "Not a single image contained a chessboard pattern that could be detected.", None
 
     matrix = np.zeros((3, 3))
-    distortion = np.zeros((4, 1))
+    distortion = None
     rvecs = [np.zeros((1, 1, 3), dtype=np.float64) for i in range(len(twodpoints))]
     tvecs = [np.zeros((1, 1, 3), dtype=np.float64) for i in range(len(twodpoints))]
 
     if model == 'fisheye':
-        rms, _, _, _, _ = cv2.fisheye.calibrate(
-            threedpoints,
-            twodpoints,
-            image_gray.shape[::-1],
-            matrix,
-            distortion,
-            rvecs,
-            tvecs,
-            cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_CHECK_COND + cv2.fisheye.CALIB_FIX_SKEW,
-            (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 1e-6)
-        )
+        distortion = np.zeros((4, 1))
+        cv2.fisheye.calibrate(threedpoints, twodpoints, image_gray.shape[::-1], matrix, distortion,
+                              rvecs=rvecs, tvecs=tvecs,
+                              flags=cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_FIX_SKEW,
+                              criteria=_criteria)
     elif model == 'pinhole':
-        cv2.calibrateCamera(threedpoints, twodpoints, (image_gray.shape[1], image_gray.shape[0]), matrix, distortion,
+        distortion = np.zeros((5, 1))
+        cv2.calibrateCamera(threedpoints, twodpoints, image_gray.shape[::-1], matrix, distortion,
                             rvecs=rvecs, tvecs=tvecs,
-                            criteria=(cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 1e-6))
+                            criteria=_criteria)
 
     data = {'camera_matrix': np.asarray(matrix).tolist(),
             'dist_coeff': np.asarray(distortion).tolist()}
@@ -177,9 +170,7 @@ def init_logging():
     logger.addHandler(sh)
 
 
-def main():
-    init_logging()
-
+def init_arguments():
     # Parse arguments
     parser = argparse.ArgumentParser(description='Calibrate a camera using OpenCV.')
     parser.add_argument('--rows', '-r', type=int, required=True, help='Rows on the chessboard')
@@ -197,27 +188,35 @@ def main():
 
     if arguments.device is None and arguments.images is None:
         logging.error('You need to provide either a --device or a directory with --images.')
-        return
+        return None
 
     if arguments.device is not None:
         if os.path.exists('/dev/video%d' % arguments.device) is False:
             logging.error('No --device with the id /dev/video%d exists.' % arguments.device)
-            return
+            return None
 
     if arguments.images is not None:
         if os.path.exists(arguments.images) is False:
             logging.error("The provided path for the images directory does not exist: '%s'", arguments.images)
-            return
+            return None
         if arguments.device is not None:
             logging.warning("The 'images' argument was provided but the images will be captured using the camera "
                             "therefore the argument will be ignored, and the captured frames from the camera will be "
                             "used for calibration. ")
 
+    return arguments
+
+
+def main():
+    init_logging()
+    arguments = init_arguments()
+    if arguments is None:
+        return
+
     # Define the dimensions of checkerboard
     checkerboard = (arguments.columns, arguments.rows)
     square_size = arguments.squareLength  # [mm]
-    criteria = (cv2.TERM_CRITERIA_EPS +
-                cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.01)
     deltaFrame = arguments.frameTime  # [s]
 
     temp_directory = None
@@ -229,8 +228,7 @@ def main():
         capture_images(arguments.device, checkerboard, deltaFrame, criteria, temp_directory)
 
     images = glob.glob('%s/*.%s' % (image_dir, arguments.ext or "png"))
-    data, error, used_images = calibrate_camera(images, checkerboard, square_size, criteria,
-                                            width=640, height=480, model=arguments.model)
+    data, error, used_images = calibrate_camera(images, checkerboard, square_size, criteria, model=arguments.model)
 
     if temp_directory is not None:
         temp_directory.cleanup()
@@ -245,6 +243,8 @@ def main():
         logging.info("Used images: %.2f%%", used_images * 100)
         logging.info("Error: %.4f", error)
         logging.info("Saving calibration data to %s", filename)
+        logging.info("Raw output: %s", data)
+
         # and save it to a file
         with open(filename, "w+") as file:
             yaml.dump(data, file)
