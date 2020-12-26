@@ -1,4 +1,3 @@
-# Import required modules 
 import cv2
 import numpy as np
 import glob
@@ -8,9 +7,9 @@ import argparse
 import tempfile
 import logging
 import os
-import math
 
-def printProgressBar(iteration, total, prefix='', suffix='', length=100):
+
+def print_progress_bar(iteration, total, prefix='', suffix='', length=100):
     """
     Call in a loop to create terminal progress bar
     @params:
@@ -29,8 +28,9 @@ def printProgressBar(iteration, total, prefix='', suffix='', length=100):
         print()
 
 
-def capture_images(device_id, _checkerboard, delta_frame: float, _criteria, _temp_directory):
+def capture_images(device_id, model: str, _checkerboard, delta_frame: float, _square_size: float, _criteria):
     """
+    :param _square_size:
     :param _temp_directory:
     :param _criteria:
     :param _checkerboard:
@@ -40,6 +40,13 @@ def capture_images(device_id, _checkerboard, delta_frame: float, _criteria, _tem
     current = time.time()
     video_capture = cv2.VideoCapture(device_id)
     overlay_image = None
+
+    # 3D points real world coordinates
+    objectp3d = np.zeros((1, _checkerboard[0] * _checkerboard[1], 3), np.float32)
+    objectp3d[0, :, :2] = np.mgrid[0:_checkerboard[0], 0:_checkerboard[1]].T.reshape(-1, 2)
+    objectp3d *= _square_size
+    threedpoints = []
+    twodpoints = []
 
     if not video_capture.isOpened():
         logging.error("Failed to open the camera.")
@@ -53,22 +60,27 @@ def capture_images(device_id, _checkerboard, delta_frame: float, _criteria, _tem
         if overlay_image is None:
             overlay_image = np.zeros(frame.shape, frame.dtype)
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        ret, corners = cv2.findChessboardCorners(gray, _checkerboard,
-                                 cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_FAST_CHECK + cv2.CALIB_CB_NORMALIZE_IMAGE)
+        image_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        ret, corners = cv2.findChessboardCorners(image_gray, _checkerboard,
+                                                 cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_FAST_CHECK + cv2.CALIB_CB_NORMALIZE_IMAGE)
 
         if ret is True and time.time() - current >= delta_frame:
             current = time.time()
-            corners2 = cv2.cornerSubPix(gray, corners, (3, 3), (-1, -1), _criteria)
-            frame = cv2.drawChessboardCorners(frame, _checkerboard, corners2, ret)
 
+            corners2 = cv2.cornerSubPix(image_gray, corners, (3, 3), (-1, -1), _criteria)
+            threedpoints.append(objectp3d)
+            twodpoints.append(corners2)
+
+            frame = cv2.drawChessboardCorners(frame, _checkerboard, corners2, ret)
             # draw area where it detected the points
             if corners2 is not None:
                 cols, _ = _checkerboard
-                cv2.fillConvexPoly(overlay_image, np.array([corners2[0], corners2[cols-1], corners2[-1], corners2[-cols]]).astype('int32'),
+                cv2.fillConvexPoly(overlay_image,
+                                   np.array([corners2[0], corners2[cols - 1], corners2[-1], corners2[-cols]]).astype(
+                                       'int32'),
                                    (255, 0, 0))
 
-            cv2.imwrite(_temp_directory.name + '/' + str(int(round(time.time()))) + '.png', original_frame)
+            #cv2.imwrite(_temp_directory.name + '/' + str(int(round(time.time()))) + '.png', original_frame)
 
         frame = cv2.addWeighted(overlay_image, 0.4, frame, 0.6, 0)
         cv2.imshow('Video', frame)
@@ -77,8 +89,10 @@ def capture_images(device_id, _checkerboard, delta_frame: float, _criteria, _tem
         if key == ord('n'):
             break
 
+    return calibrate(model, threedpoints, twodpoints, _criteria, overlay_image.shape[::-1])
 
-def calibrate_camera(images: [], _checkerboard, _square_size, _criteria, model: str = 'fisheye') -> object:
+
+def extract_images(images: [], _checkerboard, _square_size, _criteria, model: str = 'fisheye') -> object:
     """
 
     :rtype: object
@@ -88,12 +102,12 @@ def calibrate_camera(images: [], _checkerboard, _square_size, _criteria, model: 
 
     # 3D points real world coordinates
     objectp3d = np.zeros((1, _checkerboard[0] * _checkerboard[1], 3), np.float32)
-    objectp3d[0, :, :2] = np.mgrid[0:_checkerboard[0],0:_checkerboard[1]].T.reshape(-1, 2)
+    objectp3d[0, :, :2] = np.mgrid[0:_checkerboard[0], 0:_checkerboard[1]].T.reshape(-1, 2)
     objectp3d *= _square_size
     threedpoints = []
     twodpoints = []
 
-    counter = 0
+    _detected_at_least_one = False
     for i in range(len(images)):
         image = cv2.imread(images[i])
         image_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -102,46 +116,46 @@ def calibrate_camera(images: [], _checkerboard, _square_size, _criteria, model: 
         ret, corners = cv2.findChessboardCorners(image_gray, _checkerboard)
 
         if ret:
-            counter += 1
+            _detected_at_least_one = True
             threedpoints.append(objectp3d)
-
             corners2 = cv2.cornerSubPix(image_gray, corners, (3, 3), (-1, -1), _criteria)
             twodpoints.append(corners2)
-            image = cv2.drawChessboardCorners(image, _checkerboard, corners2, ret)
 
-            cv2.imshow("cropped", image)
-            cv2.waitKey(20)
-        printProgressBar(i + 1, len(images))
+        print_progress_bar(i + 1, len(images))
 
-    if counter == 0:
-        return False, "Not a single image contained a chessboard pattern that could be detected.", None
+    if len(twodpoints) == 0:
+        return False, "Not a single image contained a chessboard pattern that could be detected."
 
-    matrix = np.zeros((3, 3))
+    return calibrate(model, threedpoints, twodpoints, _criteria, image_gray.shape[::-1])
+
+
+def calibrate(model, threedpoints, twodpoints, _criteria, image_shape):
+    camera_matrix = np.zeros((3, 3))
     distortion = None
     rvecs = [np.zeros((1, 1, 3), dtype=np.float64) for _ in range(len(twodpoints))]
     tvecs = [np.zeros((1, 1, 3), dtype=np.float64) for _ in range(len(twodpoints))]
 
     if model == 'fisheye':
         distortion = np.zeros((4, 1))
-        cv2.fisheye.calibrate(threedpoints, twodpoints, image_gray.shape[::-1], matrix, distortion,
+        cv2.fisheye.calibrate(threedpoints, twodpoints, image_shape, camera_matrix, distortion,
                               rvecs=rvecs, tvecs=tvecs,
                               flags=cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_FIX_SKEW,
                               criteria=_criteria)
     elif model == 'pinhole':
         distortion = np.zeros((5, 1))
-        cv2.calibrateCamera(threedpoints, twodpoints, image_gray.shape[::-1], matrix, distortion,
+        cv2.calibrateCamera(threedpoints, twodpoints, image_shape, camera_matrix, distortion,
                             rvecs=rvecs, tvecs=tvecs,
                             criteria=_criteria)
 
-    data = {'camera_matrix': np.asarray(matrix).tolist(),
+    data = {'camera_matrix': np.asarray(camera_matrix).tolist(),
             'dist_coeff': np.asarray(distortion).tolist()}
 
     total_error = 0
     for i in range(len(threedpoints)):
-        imgpoints2, _ = cv2.projectPoints(threedpoints[i], rvecs[i], tvecs[i], matrix, distortion)
+        imgpoints2, _ = cv2.projectPoints(threedpoints[i], rvecs[i], tvecs[i], camera_matrix, distortion)
         total_error += cv2.norm(twodpoints[i], imgpoints2, cv2.NORM_L2) / len(imgpoints2)
 
-    return data, total_error / len(threedpoints), counter / len(images)
+    return data, total_error / len(threedpoints)
 
 
 def init_logging():
@@ -223,19 +237,12 @@ def main():
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.01)
     deltaFrame = arguments.frameTime  # [s]
 
-    temp_directory = None
     image_dir = arguments.images
-
     if arguments.device is not None:
-        temp_directory = tempfile.TemporaryDirectory()
-        image_dir = temp_directory.name
-        capture_images(arguments.device, checkerboard, deltaFrame, criteria, temp_directory)
-
-    images = glob.glob('%s/*.%s' % (image_dir, arguments.ext or "png"))
-    data, error, used_images = calibrate_camera(images, checkerboard, square_size, criteria, model=arguments.model)
-
-    if temp_directory is not None:
-        temp_directory.cleanup()
+        data, error = capture_images(arguments.device, arguments.model, checkerboard, deltaFrame, square_size, criteria)
+    else:
+        images = glob.glob('%s/*.%s' % (image_dir, arguments.ext or "png"))
+        data, error = extract_images(images, checkerboard, square_size, criteria, model=arguments.model)
 
     if data is False:
         logging.error("Calibration Failed! - %s", error)
@@ -244,7 +251,6 @@ def main():
         if arguments.output is not None:
             filename = arguments.output
 
-        logging.info("Used images: %.2f%%", used_images * 100)
         logging.info("Error: %.4f", error)
         logging.info("Saving calibration data to %s", filename)
         logging.info("Raw output: %s", data)
