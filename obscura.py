@@ -8,9 +8,9 @@ import argparse
 import tempfile
 import logging
 import os
+import math
 
-
-def printProgressBar(iteration, total, prefix='', suffix='', decimals=1, length=100, fill='█', printEnd="\r"):
+def printProgressBar(iteration, total, prefix='', suffix='', length=100):
     """
     Call in a loop to create terminal progress bar
     @params:
@@ -18,15 +18,12 @@ def printProgressBar(iteration, total, prefix='', suffix='', decimals=1, length=
         total       - Required  : total iterations (Int)
         prefix      - Optional  : prefix string (Str)
         suffix      - Optional  : suffix string (Str)
-        decimals    - Optional  : positive number of decimals in percent complete (Int)
         length      - Optional  : character length of bar (Int)
-        fill        - Optional  : bar fill character (Str)
-        printEnd    - Optional  : end character (e.g. "\r", "\r\n") (Str)
     """
-    percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
+    percent = "{0:.2f}".format(100 * (iteration / float(total)))
     filledLength = int(length * iteration // total)
-    bar = fill * filledLength + '-' * (length - filledLength)
-    print(f'\r{prefix} |{bar}| {percent}% {suffix}', end=printEnd)
+    bar = '█' * filledLength + '-' * (length - filledLength)
+    print(f'\r{prefix} |{bar}| {percent}% {suffix}', end='\r')
     # Print New Line on Complete
     if iteration == total:
         print()
@@ -52,18 +49,25 @@ def capture_images(device_id, _checkerboard, delta_frame: float, _criteria, _tem
         ret, frame = video_capture.read()
         original_frame = frame.copy()
 
+        # create overlay image with correct shape if it does not exist
         if overlay_image is None:
             overlay_image = np.zeros(frame.shape, frame.dtype)
-            cv2.putText(overlay_image, 'OpenCV', (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0))
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
         ret, corners = cv2.findChessboardCorners(gray, _checkerboard,
                                  cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_FAST_CHECK + cv2.CALIB_CB_NORMALIZE_IMAGE)
+
         if ret is True and time.time() - current >= delta_frame:
             current = time.time()
             corners2 = cv2.cornerSubPix(gray, corners, (3, 3), (-1, -1), _criteria)
             frame = cv2.drawChessboardCorners(frame, _checkerboard, corners2, ret)
+
+            # draw area where it detected the points
+            if corners2 is not None:
+                cols, _ = _checkerboard
+                cv2.fillConvexPoly(overlay_image, np.array([corners2[0], corners2[cols-1], corners2[-1], corners2[-cols]]).astype('int32'),
+                                   (255, 0, 0))
+
             cv2.imwrite(_temp_directory.name + '/' + str(int(round(time.time()))) + '.png', original_frame)
 
         frame = cv2.addWeighted(overlay_image, 0.4, frame, 0.6, 0)
@@ -114,8 +118,8 @@ def calibrate_camera(images: [], _checkerboard, _square_size, _criteria, model: 
 
     matrix = np.zeros((3, 3))
     distortion = None
-    rvecs = [np.zeros((1, 1, 3), dtype=np.float64) for i in range(len(twodpoints))]
-    tvecs = [np.zeros((1, 1, 3), dtype=np.float64) for i in range(len(twodpoints))]
+    rvecs = [np.zeros((1, 1, 3), dtype=np.float64) for _ in range(len(twodpoints))]
+    tvecs = [np.zeros((1, 1, 3), dtype=np.float64) for _ in range(len(twodpoints))]
 
     if model == 'fisheye':
         distortion = np.zeros((4, 1))
@@ -137,7 +141,7 @@ def calibrate_camera(images: [], _checkerboard, _square_size, _criteria, model: 
         imgpoints2, _ = cv2.projectPoints(threedpoints[i], rvecs[i], tvecs[i], matrix, distortion)
         total_error += cv2.norm(twodpoints[i], imgpoints2, cv2.NORM_L2) / len(imgpoints2)
 
-    return (data, total_error / len(threedpoints), counter / len(images))
+    return data, total_error / len(threedpoints), counter / len(images)
 
 
 def init_logging():
@@ -221,7 +225,7 @@ def main():
 
     temp_directory = None
     image_dir = arguments.images
-    images = []
+
     if arguments.device is not None:
         temp_directory = tempfile.TemporaryDirectory()
         image_dir = temp_directory.name
