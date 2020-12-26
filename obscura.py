@@ -89,7 +89,10 @@ def capture_images(device_id, model: str, _checkerboard, delta_frame: float, _sq
         if key == ord('n'):
             break
 
-    return calibrate(model, threedpoints, twodpoints, _criteria, overlay_image.shape[::-1])
+    if len(twodpoints) == 0:
+        return False, "No images were captured."
+
+    return calibrate(model, threedpoints, twodpoints, _criteria, overlay_image.shape[0:2])
 
 
 def extract_images(images: [], _checkerboard, _square_size, _criteria, model: str = 'fisheye') -> object:
@@ -130,6 +133,7 @@ def extract_images(images: [], _checkerboard, _square_size, _criteria, model: st
 
 
 def calibrate(model, threedpoints, twodpoints, _criteria, image_shape):
+
     camera_matrix = np.zeros((3, 3))
     distortion = None
     rvecs = [np.zeros((1, 1, 3), dtype=np.float64) for _ in range(len(twodpoints))]
@@ -189,6 +193,7 @@ def init_logging():
 
 
 def init_arguments():
+
     # Parse arguments
     parser = argparse.ArgumentParser(description='Calibrate a camera using OpenCV.')
     parser.add_argument('--rows', '-r', type=int, required=True, help='Rows on the chessboard')
