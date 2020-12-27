@@ -128,6 +128,7 @@ def extract_images(images: [], _checkerboard, _square_size, _criteria, model: st
     threedpoints = []
     twodpoints = []
 
+    logging.info("Extracting calibration patterns from images...")
     _detected_at_least_one = False
     for i in range(len(images)):
         image = cv2.imread(images[i])

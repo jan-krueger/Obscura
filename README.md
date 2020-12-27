@@ -40,7 +40,7 @@ optional arguments:
   --squareLength SQUARELENGTH, -sl SQUARELENGTH
                         Side length of one square [mm]
   --frameTime FRAMETIME, -ft FRAMETIME
-                        Time between capturing images [s]
+                        Time between capturing images [s]. If set to '-1', you can use the 's' key to take pictures manually.
   --device DEVICE, -d DEVICE
                         Selects the id of the device that should be used to capture the images.
   --images IMAGES, -i IMAGES
