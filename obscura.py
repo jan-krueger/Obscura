@@ -93,17 +93,17 @@ def capture_images(device_id, model: str, _checkerboard, delta_frame: float, _sq
             cv2.putText(frame, text="Coverage: %.2f%%" % (coverage_ratio * 100), org=(0, 40),
                     fontFace=cv2.FONT_HERSHEY_PLAIN, fontScale=1, color=(0, 0, 255))
 
-        button_text = "%s%sCoverage [c]: %s" % (
+        button_text = "%s%s%s" % (
             'Calibrate [n] | ' if len(twodpoints) > 0 else '',
             'Capture [s] | ' if delta_frame == -1 else '',
-            'On' if display_coverage else 'Off'
+            'Coverage [c]: %s' % ('On' if display_coverage else 'Off')
         )
         cv2.putText(frame, text=button_text, org=(0, 20), fontFace=cv2.FONT_HERSHEY_PLAIN, fontScale=1,
                     color=(0, 0, 255), thickness=2)
         cv2.imshow('Video', frame)
 
         key = cv2.waitKey(50)
-        if key == ord('n'):
+        if key == ord('n') and len(twodpoints) > 0:
             break
         elif key == ord('c'):
             display_coverage = not display_coverage
@@ -124,6 +124,9 @@ def extract_images(images: [], _checkerboard, _square_size, _criteria, model: st
 
     # 3D points real world coordinates
     objectp3d = create_object_point(_checkerboard, _square_size)
+
+    threedpoints = []
+    twodpoints = []
 
     _detected_at_least_one = False
     for i in range(len(images)):
