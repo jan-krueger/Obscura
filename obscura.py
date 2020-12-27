@@ -4,7 +4,6 @@ import glob
 import yaml
 import time
 import argparse
-import tempfile
 import logging
 import os
 
@@ -30,8 +29,8 @@ def print_progress_bar(iteration, total, prefix='', suffix='', length=100):
 
 def capture_images(device_id, model: str, _checkerboard, delta_frame: float, _square_size: float, _criteria):
     """
+    :param model:
     :param _square_size:
-    :param _temp_directory:
     :param _criteria:
     :param _checkerboard:
     :param delta_frame:
@@ -39,7 +38,9 @@ def capture_images(device_id, model: str, _checkerboard, delta_frame: float, _sq
     """
     current = time.time()
     video_capture = cv2.VideoCapture(device_id)
-    overlay_image = None
+    coverage_image = None
+
+    coverage_ratio = 0 # just keeps track so that we can draw it on the screen
 
     # 3D points real world coordinates
     objectp3d = np.zeros((1, _checkerboard[0] * _checkerboard[1], 3), np.float32)
@@ -54,35 +55,40 @@ def capture_images(device_id, model: str, _checkerboard, delta_frame: float, _sq
     while video_capture.isOpened():
         # Capture frame-by-frame
         ret, frame = video_capture.read()
-        original_frame = frame.copy()
 
         # create overlay image with correct shape if it does not exist
-        if overlay_image is None:
-            overlay_image = np.zeros(frame.shape, frame.dtype)
+        if coverage_image is None:
+            coverage_image = np.zeros(frame.shape, frame.dtype)
 
         image_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         ret, corners = cv2.findChessboardCorners(image_gray, _checkerboard,
                                                  cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_FAST_CHECK + cv2.CALIB_CB_NORMALIZE_IMAGE)
 
-        if ret is True and time.time() - current >= delta_frame:
+        if ret is True and (time.time() - current >= delta_frame or delta_frame == -1):
             current = time.time()
 
             corners2 = cv2.cornerSubPix(image_gray, corners, (3, 3), (-1, -1), _criteria)
-            threedpoints.append(objectp3d)
-            twodpoints.append(corners2)
-
             frame = cv2.drawChessboardCorners(frame, _checkerboard, corners2, ret)
-            # draw area where it detected the points
-            if corners2 is not None:
-                cols, _ = _checkerboard
-                cv2.fillConvexPoly(overlay_image,
-                                   np.array([corners2[0], corners2[cols - 1], corners2[-1], corners2[-cols]]).astype(
-                                       'int32'),
-                                   (255, 0, 0))
 
-            #cv2.imwrite(_temp_directory.name + '/' + str(int(round(time.time()))) + '.png', original_frame)
+            if delta_frame > 0 or (delta_frame == -1 and cv2.waitKey(50) == ord('s')):
+                threedpoints.append(objectp3d)
+                twodpoints.append(corners2)
 
-        frame = cv2.addWeighted(overlay_image, 0.4, frame, 0.6, 0)
+                # draw area where it detected the points
+                if corners2 is not None:
+                    cols, _ = _checkerboard
+                    cv2.fillConvexPoly(coverage_image,
+                                       np.array(
+                                           [corners2[0], corners2[cols - 1], corners2[-1], corners2[-cols]]).astype(
+                                           'int32'),
+                                       (255, 0, 0))
+                    _, counts = np.unique(coverage_image.reshape(-1, 3), return_counts=True, axis=0)
+                    coverage_ratio = (counts[1] / (counts[0] + counts[1]))
+            # cv2.imwrite(_temp_directory.name + '/' + str(int(round(time.time()))) + '.png', original_frame)
+
+        frame = cv2.addWeighted(coverage_image, 0.4, frame, 0.6, 0)
+        cv2.putText(frame, text="Coverage: %.2f%%" % (coverage_ratio * 100), org=(0, 20),
+                    fontFace=cv2.FONT_HERSHEY_PLAIN, fontScale=1, color=(255, 255, 255))
         cv2.imshow('Video', frame)
         key = cv2.waitKey(50)
 
@@ -92,7 +98,7 @@ def capture_images(device_id, model: str, _checkerboard, delta_frame: float, _sq
     if len(twodpoints) == 0:
         return False, "No images were captured."
 
-    return calibrate(model, threedpoints, twodpoints, _criteria, overlay_image.shape[0:2])
+    return calibrate(model, threedpoints, twodpoints, _criteria, coverage_image.shape[0:2])
 
 
 def extract_images(images: [], _checkerboard, _square_size, _criteria, model: str = 'fisheye') -> object:
@@ -133,7 +139,6 @@ def extract_images(images: [], _checkerboard, _square_size, _criteria, model: st
 
 
 def calibrate(model, threedpoints, twodpoints, _criteria, image_shape):
-
     camera_matrix = np.zeros((3, 3))
     distortion = None
     rvecs = [np.zeros((1, 1, 3), dtype=np.float64) for _ in range(len(twodpoints))]
@@ -193,14 +198,15 @@ def init_logging():
 
 
 def init_arguments():
-
     # Parse arguments
     parser = argparse.ArgumentParser(description='Calibrate a camera using OpenCV.')
     parser.add_argument('--rows', '-r', type=int, required=True, help='Rows on the chessboard')
     parser.add_argument('--columns', '-c', type=int, required=True, help='Columns on the chessboard')
     parser.add_argument('--model', '-m', type=str, required=True, choices=['pinhole', 'fisheye'])
     parser.add_argument('--squareLength', '-sl', type=float, required=True, help='Side length of one square [mm]')
-    parser.add_argument('--frameTime', '-ft', type=float, default=1, help='Time between capturing images [s]')
+    parser.add_argument('--frameTime', '-ft', type=float, default=1, help='Time between capturing images [s]. If set '
+                                                                          'to \'-1\', you can use the \'s\' key to take'
+                                                                          ' pictures manually.')
     parser.add_argument("--device", "-d", type=int,
                         help='Selects the id of the device that should be used to capture the images.')
     parser.add_argument("--images", "-i", type=str, help='Directory with images.')
@@ -227,6 +233,9 @@ def init_arguments():
                             "therefore the argument will be ignored, and the captured frames from the camera will be "
                             "used for calibration. ")
 
+    if arguments.frameTime == -1:
+        logging.info("--frameTime has been set to '-1'. Use your 's' key to take pictures.")
+
     return arguments
 
 
@@ -248,6 +257,10 @@ def main():
     else:
         images = glob.glob('%s/*.%s' % (image_dir, arguments.ext or "png"))
         data, error = extract_images(images, checkerboard, square_size, criteria, model=arguments.model)
+
+    # calculate coverage based on how many values are not zero
+    # display 'n' to continue processing
+    # show how many images have been taken
 
     if data is False:
         logging.error("Calibration Failed! - %s", error)
