@@ -38,14 +38,15 @@ def capture_images(device_id, model: str, _checkerboard, delta_frame: float, _sq
     """
     current = time.time()
     video_capture = cv2.VideoCapture(device_id)
-    coverage_image = None
 
-    coverage_ratio = 0 # just keeps track so that we can draw it on the screen
+    # GUI
+    coverage_ratio = 0  # just keeps track so that we can draw it on the screen
+    coverage_image = None
+    display_coverage = False
 
     # 3D points real world coordinates
-    objectp3d = np.zeros((1, _checkerboard[0] * _checkerboard[1], 3), np.float32)
-    objectp3d[0, :, :2] = np.mgrid[0:_checkerboard[0], 0:_checkerboard[1]].T.reshape(-1, 2)
-    objectp3d *= _square_size
+    objectp3d = create_object_point(_checkerboard, _square_size)
+
     threedpoints = []
     twodpoints = []
 
@@ -86,14 +87,26 @@ def capture_images(device_id, model: str, _checkerboard, delta_frame: float, _sq
                     coverage_ratio = (counts[1] / (counts[0] + counts[1]))
             # cv2.imwrite(_temp_directory.name + '/' + str(int(round(time.time()))) + '.png', original_frame)
 
-        frame = cv2.addWeighted(coverage_image, 0.4, frame, 0.6, 0)
-        cv2.putText(frame, text="Coverage: %.2f%%" % (coverage_ratio * 100), org=(0, 20),
-                    fontFace=cv2.FONT_HERSHEY_PLAIN, fontScale=1, color=(255, 255, 255))
-        cv2.imshow('Video', frame)
-        key = cv2.waitKey(50)
+        # GUI
+        if display_coverage:
+            frame = cv2.addWeighted(coverage_image, 0.4, frame, 0.6, 0)
+            cv2.putText(frame, text="Coverage: %.2f%%" % (coverage_ratio * 100), org=(0, 40),
+                    fontFace=cv2.FONT_HERSHEY_PLAIN, fontScale=1, color=(0, 0, 255))
 
+        button_text = "%s%sCoverage [c]: %s" % (
+            'Calibrate [n] | ' if len(twodpoints) > 0 else '',
+            'Capture [s] | ' if delta_frame == -1 else '',
+            'On' if display_coverage else 'Off'
+        )
+        cv2.putText(frame, text=button_text, org=(0, 20), fontFace=cv2.FONT_HERSHEY_PLAIN, fontScale=1,
+                    color=(0, 0, 255), thickness=2)
+        cv2.imshow('Video', frame)
+
+        key = cv2.waitKey(50)
         if key == ord('n'):
             break
+        elif key == ord('c'):
+            display_coverage = not display_coverage
 
     if len(twodpoints) == 0:
         return False, "No images were captured."
@@ -110,11 +123,7 @@ def extract_images(images: [], _checkerboard, _square_size, _criteria, model: st
         return False, "No images were found", None
 
     # 3D points real world coordinates
-    objectp3d = np.zeros((1, _checkerboard[0] * _checkerboard[1], 3), np.float32)
-    objectp3d[0, :, :2] = np.mgrid[0:_checkerboard[0], 0:_checkerboard[1]].T.reshape(-1, 2)
-    objectp3d *= _square_size
-    threedpoints = []
-    twodpoints = []
+    objectp3d = create_object_point(_checkerboard, _square_size)
 
     _detected_at_least_one = False
     for i in range(len(images)):
@@ -237,6 +246,13 @@ def init_arguments():
         logging.info("--frameTime has been set to '-1'. Use your 's' key to take pictures.")
 
     return arguments
+
+
+def create_object_point(checkerboard, square_size):
+    objectp3d = np.zeros((1, checkerboard[0] * checkerboard[1], 3), np.float32)
+    objectp3d[0, :, :2] = np.mgrid[0:checkerboard[0], 0:checkerboard[1]].T.reshape(-1, 2)
+    objectp3d *= square_size
+    return objectp3d
 
 
 def main():
