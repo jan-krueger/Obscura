@@ -120,7 +120,7 @@ def extract_images(images: [], _checkerboard, _square_size, _criteria, model: st
     :rtype: object
     """
     if len(images) == 0:
-        return False, "No images were found", None
+        return False, "No images were found"
 
     # 3D points real world coordinates
     objectp3d = create_object_point(_checkerboard, _square_size)
@@ -159,26 +159,18 @@ def calibrate(model, threedpoints, twodpoints, _criteria, image_shape):
 
     if model == 'fisheye':
         distortion = np.zeros((4, 1))
-        cv2.fisheye.calibrate(threedpoints, twodpoints, image_shape, camera_matrix, distortion,
+        ret, _, _, _, _ = cv2.fisheye.calibrate(threedpoints, twodpoints, image_shape, camera_matrix, distortion,
                               rvecs=rvecs, tvecs=tvecs,
-                              flags=cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_FIX_SKEW,
                               criteria=_criteria)
     elif model == 'pinhole':
         distortion = np.zeros((5, 1))
-        cv2.calibrateCamera(threedpoints, twodpoints, image_shape, camera_matrix, distortion,
-                            rvecs=rvecs, tvecs=tvecs,
-                            criteria=_criteria)
+        ret, _, _, _, _ = cv2.calibrateCamera(threedpoints, twodpoints, image_shape, camera_matrix, distortion,
+                            rvecs=rvecs, tvecs=tvecs)
 
     data = {'camera_matrix': np.asarray(camera_matrix).tolist(),
             'dist_coeff': np.asarray(distortion).tolist()}
 
-    total_error = 0
-    for i in range(len(threedpoints)):
-        imgpoints2, _ = cv2.projectPoints(threedpoints[i], rvecs[i], tvecs[i], camera_matrix, distortion)
-        total_error += cv2.norm(twodpoints[i], imgpoints2, cv2.NORM_L2) / len(imgpoints2)
-
-    return data, total_error / len(threedpoints)
-
+    return data, ret
 
 def init_logging():
     logger = logging.getLogger()
@@ -289,9 +281,15 @@ def main():
         if arguments.output is not None:
             filename = arguments.output
 
-        logging.info("Error: %.4f", error)
+        logging.info("Re-projection error: %.4f", error)
+        if error > 10:
+            logging.critical("The re-projection error is big - it should be as close to 0 as possible. Try to "
+                             "recalibrate with better coverage. A good rule of thumb for calibrating is to translate,"
+                             " and rotate the camera on all major axis by making smooth movements, and repeating this"
+                             " for each translation and rotation three times.")
+
         logging.info("Saving calibration data to %s", filename)
-        logging.info("Raw output: %s", data)
+        logging.info(data)
 
         # and save it to a file
         with open(filename, "w+") as file:
